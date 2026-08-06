@@ -21,9 +21,7 @@ background thread, so the interface never freezes waiting on a device.
 - [Architecture](#architecture)
 - [Credential storage](#credential-storage)
 - [Monitoring: SNMP vs CLI](#monitoring-snmp-vs-cli)
-- [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
-- [Project layout](#project-layout)
 - [Extending](#extending)
 - [Licence](#licence)
 
@@ -391,30 +389,6 @@ unbounded stream of error notifications from a device that has gone away.
 
 ---
 
-## Testing
-
-```bash
-pip install pytest
-QT_QPA_PLATFORM=offscreen pytest tests/ -q
-```
-
-109 tests covering:
-
-- **`test_parsers.py`** — every parser against captured real device output,
-  including edge cases: descriptions containing spaces, wrapped VLAN port lists,
-  `administratively down` vs plain `down`, natural interface sort ordering
-  (`Gi1/0/2` before `Gi1/0/10`), non-contiguous subnet masks, and distinguishing
-  genuine `%` errors from benign `% Warning:` lines.
-- **`test_ansi.py`** — escape parsing, including sequences split across two reads
-  (which happens constantly on a slow serial line and is the most common way a
-  naive terminal corrupts its output).
-- **`test_connection.py`** — the threading guarantees, using a fake transport that
-  records which thread touched it.
-
-The `QT_QPA_PLATFORM=offscreen` variable lets the Qt tests run headless in CI.
-
----
-
 ## Troubleshooting
 
 **"Authentication failed" but the credentials are correct**
@@ -443,50 +417,6 @@ that `show ip interface brief` returns output for your account.
 **Garbled terminal output over serial**
 Check the baud rate, and confirm flow control is off — Cisco consoles use none,
 and enabling it is a classic cause of a hung console.
-
----
-
-## Project layout
-
-```
-ciscoiosbox/
-├── run.py                          # development entry point
-├── requirements.txt
-├── pyproject.toml
-├── ciscoiosbox.spec                # PyInstaller build spec
-├── README.md
-├── src/ciscoiosbox/
-│   ├── app.py                      # bootstrap: logging, Qt setup, entry point
-│   ├── core/                       # MODEL — no Qt widget imports
-│   │   ├── models.py               #   DeviceProfile, InterfaceRow, Vlan, …
-│   │   ├── exceptions.py           #   typed error hierarchy
-│   │   ├── transport.py            #   BaseTransport ABC
-│   │   ├── netmiko_transport.py    #   SSH + Telnet + Serial
-│   │   ├── connection.py           #   ConnectionWorker (QThread) + Controller
-│   │   ├── credentials.py          #   keyring → encrypted-vault fallback
-│   │   ├── session_store.py        #   profile persistence
-│   │   └── snmp.py                 #   SNMP v2c/v3 with a private event loop
-│   ├── parsers/                    # pure functions: str → dataclass
-│   │   ├── errors.py               #   IOS rejection detection
-│   │   ├── textfsm_parser.py       #   ntc-templates wrapper
-│   │   ├── interfaces.py / vlans.py / system.py
-│   ├── services/                   # VIEWMODEL — submit tasks, emit signals
-│   │   ├── base.py
-│   │   ├── interface_service.py / vlan_service.py
-│   │   ├── system_service.py / monitor_service.py
-│   └── ui/                         # VIEW — widgets only
-│       ├── main_window.py / device_tab.py
-│       ├── theme.py                #   palette + dark stylesheet
-│       ├── ansi.py / terminal.py   #   escape parser + terminal widget
-│       ├── session_manager.py / session_dialog.py
-│       ├── interfaces_view.py / vlans_view.py / system_view.py
-│       ├── monitor_view.py / graphs.py
-│       └── widgets/toast.py
-└── tests/
-    ├── test_parsers.py
-    ├── test_ansi.py
-    └── test_connection.py
-```
 
 ---
 
