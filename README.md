@@ -13,7 +13,7 @@ background thread, so the interface never freezes waiting on a device.
 ## Table of contents
 
 - [Features](#features)
-- [Screenshotless tour](#screenshotless-tour)
+- [Tour](#tour)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Running](#running)
@@ -82,22 +82,42 @@ background thread, so the interface never freezes waiting on a device.
 
 ---
 
-## Screenshotless tour
+## Tour
 
-```
-┌───────────────┬──────────────────────────────────────────────────────────┐
-│ Saved Sessions│  ● sw-access-01     WS-C2960X-24TS-L · 15.2(4)E7        │
-│ ───────────── ├──────────────────────────────────────────────────────────┤
-│ ▾ Datacenter  │ Terminal │ Interfaces │ VLANs │ System │ Monitoring      │
-│   🔒 Core SW  ├──────────────────────────────────────────────────────────┤
-│   🔌 Console  │ Interface  Description       Status     Admin  VLAN Mode │
-│ ▾ Branch      │ Gi1/0/1    uplink to core    connected  Up    trunk Trunk│
-│   🔒 Edge-01  │ Gi1/0/2    —                 notconnect Up    10    Access│
-│   ⌨ Old-RTR   │ Gi1/0/3    spare port        disabled   Shut  10    Access│
-│               │                                                          │
-│ [Connect][New]│  ● 14 up   ● 8 down   ● 2 shut                          │
-└───────────────┴──────────────────────────────────────────────────────────┘
-```
+**Session manager** — organised, filterable device profiles with SSH, Telnet
+or serial connections:
+
+![Session manager](demo_screenshots/01-session-manager.png)
+
+**ANSI terminal** — connect to a device and work at the CLI just like PuTTY:
+
+![Terminal](demo_screenshots/02-terminal.png)
+
+**Interfaces** — sortable grid with status, admin state, VLAN, mode, duplex,
+speed, IP and media type, plus one-click `shutdown` / `no shutdown`:
+
+![Interfaces](demo_screenshots/03-interfaces.png)
+
+**VLANs** — browse the VLAN database, create single VLANs or ranges, and
+assign ports to access or trunk mode:
+
+![VLANs](demo_screenshots/04-vlans.png)
+
+**System** — device facts, hostname, management IP / mask / gateway, and
+running-config export:
+
+![System](demo_screenshots/05-system.png)
+
+**Monitoring** — live CPU, memory and per-interface bandwidth graphs:
+
+![Monitoring](demo_screenshots/06-monitoring.png)
+
+The **session editor** stores credentials through the encrypted vault and
+optionally enables SNMP polling for the device:
+
+![Session editor](demo_screenshots/07-session-editor.png)
+
+![Session editor — SNMP settings](demo_screenshots/08-session-editor-snmp.png)
 
 ---
 
