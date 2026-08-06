@@ -167,7 +167,7 @@ Things worth trying:
 
 ```bash
 # 1. Clone
-git clone <your-repo-url> ciscoiosbox
+git clone https://github.com/DrZere/ciscoiosbox ciscoiosbox
 cd ciscoiosbox
 
 # 2. Create a virtual environment
@@ -398,7 +398,7 @@ pip install pytest
 QT_QPA_PLATFORM=offscreen pytest tests/ -q
 ```
 
-107 tests covering:
+109 tests covering:
 
 - **`test_parsers.py`** — every parser against captured real device output,
   including edge cases: descriptions containing spaces, wrapped VLAN port lists,
