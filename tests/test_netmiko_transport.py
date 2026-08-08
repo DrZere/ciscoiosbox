@@ -11,8 +11,9 @@ without a device and without importing netmiko itself.
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
-from ciscoiosbox.core.models import DeviceProfile
+from ciscoiosbox.core.models import ConnectionType, DeviceProfile
 from ciscoiosbox.core.netmiko_transport import NetmikoTransport
 
 
@@ -83,3 +84,19 @@ def test_read_raw_returns_empty_when_channel_missing():
     """Degrade gracefully if the netmiko object has no channel (never crashes)."""
     transport = make_transport(bare=True)
     assert transport.read_raw() == ""
+
+# ─── serial is_alive ──────────────────────────────────────────────────────────
+
+def test_serial_is_alive_reports_open_port_as_alive():
+    """netmiko's is_alive() crashes on serial; ours must not kill the session."""
+    transport = make_transport()
+    transport._conn.remote_conn = SimpleNamespace(is_open=True)
+    transport.profile.connection_type = ConnectionType.SERIAL
+    assert transport.is_alive() is True
+
+
+def test_serial_is_alive_reports_closed_port_as_dead():
+    transport = make_transport()
+    transport._conn.remote_conn = SimpleNamespace(is_open=False)
+    transport.profile.connection_type = ConnectionType.SERIAL
+    assert transport.is_alive() is False

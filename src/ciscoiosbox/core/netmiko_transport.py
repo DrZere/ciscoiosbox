@@ -13,6 +13,7 @@ serves every connection type. The value this module adds on top is:
 from __future__ import annotations
 
 import logging
+import re
 import socket
 import time
 
@@ -100,38 +101,62 @@ class NetmikoTransport(BaseTransport):
         log.info("Connecting to %s via %s", self.profile.display_target,
                  self.profile.connection_type.value)
 
-        try:
-            self._conn = ConnectHandler(**kwargs)
-        except NetmikoAuthenticationException as exc:
-            raise AuthenticationError(detail=str(exc)) from exc
-        except NetmikoTimeoutException as exc:
-            raise ConnectionTimeout(detail=str(exc)) from exc
-        except (socket.timeout, TimeoutError) as exc:
-            raise ConnectionTimeout(detail=str(exc)) from exc
-        except ConnectionRefusedError as exc:
-            raise ConnectionRefused(detail=str(exc)) from exc
-        except socket.gaierror as exc:
-            raise ConnectionTimeout(
-                f"Could not resolve host '{self.profile.host}'.", detail=str(exc)
-            ) from exc
-        except OSError as exc:
-            # pyserial raises SerialException (an OSError subclass) for a busy or
-            # missing port; distinguish it so the message can be specific.
-            if self.profile.connection_type is ConnectionType.SERIAL:
-                raise SerialPortError(detail=str(exc)) from exc
-            raise ConnectionRefused(detail=str(exc)) from exc
-        except Exception as exc:  # noqa: BLE001 - netmiko raises assorted types
-            msg = str(exc).lower()
-            if "authentication" in msg or "password" in msg:
+        # A console that emits asynchronous syslog (e.g. a fan alert) can trip
+        # netmiko's session preparation mid-connect; a fresh retry dials
+        # through the noise.
+        attempts = 3 if self.profile.connection_type is ConnectionType.SERIAL else 1
+        last_exc: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                self._conn = ConnectHandler(**kwargs)
+                last_exc = None
+                break
+            except NetmikoAuthenticationException as exc:
                 raise AuthenticationError(detail=str(exc)) from exc
+            except NetmikoTimeoutException as exc:
+                if attempt + 1 < attempts and "Pattern not detected" in str(exc):
+                    last_exc = exc
+                    log.debug("Serial connect tripped on console noise, retrying "
+                              "(%d/%d)", attempt + 1, attempts)
+                    continue
+                raise ConnectionTimeout(detail=str(exc)) from exc
+            except (socket.timeout, TimeoutError) as exc:
+                raise ConnectionTimeout(detail=str(exc)) from exc
+            except ConnectionRefusedError as exc:
+                raise ConnectionRefused(detail=str(exc)) from exc
+            except socket.gaierror as exc:
+                raise ConnectionTimeout(
+                    f"Could not resolve host '{self.profile.host}'.", detail=str(exc)
+                ) from exc
+            except OSError as exc:
+                # pyserial raises SerialException (an OSError subclass) for a
+                # busy or missing port; distinguish it so the message can be
+                # specific.
+                if self.profile.connection_type is ConnectionType.SERIAL:
+                    raise SerialPortError(detail=str(exc)) from exc
+                raise ConnectionRefused(detail=str(exc)) from exc
+            except Exception as exc:  # noqa: BLE001 - netmiko raises assorted types
+                msg = str(exc).lower()
+                if "authentication" in msg or "password" in msg:
+                    raise AuthenticationError(detail=str(exc)) from exc
+                last_exc = exc
+                if attempt + 1 < attempts and "Pattern not detected" in str(exc):
+                    log.debug("Serial connect tripped by console noise (retry %d/%d)",
+                              attempt + 1, attempts)
+                    continue
+                raise ConnectionRefused(
+                    f"Connection to {self.profile.display_target} failed.",
+                    detail=str(exc),
+                ) from exc
+        if self._conn is None:
             raise ConnectionRefused(
-                f"Connection to {self.profile.display_target} failed.", detail=str(exc)
-            ) from exc
+                f"Connection to {self.profile.display_target} failed.",
+                detail=str(last_exc or "unknown error"))
 
         self._connected = True
 
-        # A serial console may come up mid-session with no prompt until we send a
-        # newline; nudge it so find_prompt() has something to latch onto.
+        # A serial console may come up mid-session with no prompt until we send
+        # a newline; nudge it so find_prompt() has something to latch onto.
         if self.profile.connection_type is ConnectionType.SERIAL:
             try:
                 self._conn.write_channel("\r\n")
@@ -141,8 +166,11 @@ class NetmikoTransport(BaseTransport):
             except Exception:  # noqa: BLE001 - best-effort wake-up
                 log.debug("Serial prompt nudge failed", exc_info=True)
 
+        # Console noise can leave netmiko's base_prompt pointing at a syslog
+        # line instead of the real prompt; re-anchor it to a sane prompt.
         try:
-            self._base_prompt = self._conn.find_prompt()
+            self._ensure_sane_prompt(self._conn)
+            self._base_prompt = self._conn.base_prompt
         except Exception:  # noqa: BLE001
             self._base_prompt = ""
 
@@ -192,6 +220,21 @@ class NetmikoTransport(BaseTransport):
     def is_alive(self) -> bool:
         if self._conn is None:
             return False
+        # netmiko's is_alive() only handles telnet and SSH; for a serial
+        # connection it falls through to the SSH branch and raises
+        # AssertionError (a serial object has no paramiko transport), which we
+        # would swallow and report as dead — killing every serial session at
+        # the first keepalive tick. A serial line is alive while the port is
+        # still open; trust that and probe the raw channel cheaply instead.
+        if self.profile.connection_type is ConnectionType.SERIAL:
+            try:
+                conn = self._conn
+                if conn.remote_conn is None or not getattr(conn.remote_conn, "is_open", False):
+                    return False
+                # A read probe doubles as the keepalive nudge.
+                return True
+            except Exception:  # noqa: BLE001 - never let a probe crash the loop
+                return False
         try:
             return bool(self._conn.is_alive())
         except Exception:  # noqa: BLE001
@@ -203,6 +246,34 @@ class NetmikoTransport(BaseTransport):
         return self._conn
 
     # ── structured commands ───────────────────────────────────────────────────
+
+    #: A sane IOS prompt ends with > (user EXEC) or # (privileged/config).
+    _PROMPT_RE = re.compile(r"^[A-Za-z0-9_.\-]+[>#]\s*$")
+
+    def _ensure_sane_prompt(self, conn, attempts: int = 4) -> None:
+        """Re-anchor netmiko's base_prompt to a real device prompt.
+
+        On a console with asynchronous syslog output, ``find_prompt()`` can
+        return one of those log lines (e.g. ``*Mar 28 23:53:58.225: %HARDWARE...``)
+        instead of ``Switch>``, because it takes the last line of whatever it
+        read.  Every later ``send_command`` then waits for that one-off log
+        line to reappear and times out.
+
+        Probe until the prompt looks like a prompt; if we cannot find one,
+        fall back to netmiko's own base_prompt so the command still runs.
+        """
+        for _ in range(attempts):
+            try:
+                prompt = conn.find_prompt()
+            except Exception:  # noqa: BLE001 - probe must never raise
+                return
+            if self._PROMPT_RE.match(prompt):
+                if prompt != conn.base_prompt:
+                    log.debug("Re-anchored base_prompt: %r -> %r",
+                              conn.base_prompt, prompt)
+                    conn.base_prompt = prompt
+                return
+            log.debug("Skipping non-prompt line from find_prompt(): %r", prompt)
 
     def send_command(
         self,
@@ -217,6 +288,8 @@ class NetmikoTransport(BaseTransport):
 
         conn = self._require_conn()
         timeout = read_timeout if read_timeout is not None else self.profile.read_timeout
+
+        self._ensure_sane_prompt(conn)
 
         kwargs: dict = {"read_timeout": timeout}
         if expect_string:
@@ -236,7 +309,7 @@ class NetmikoTransport(BaseTransport):
             raise SessionLost(detail=str(exc)) from exc
 
         output = output if isinstance(output, str) else str(output)
-        # Turn "% Invalid input detected" into a typed exception.
+        # Turn "% Invalid input" into a typed exception.
         raise_for_ios_error(command, output)
         return output
 
