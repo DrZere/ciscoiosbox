@@ -326,10 +326,23 @@ class NetmikoTransport(BaseTransport):
             raise SessionLost(detail=str(exc)) from exc
 
     def read_raw(self, timeout: float = 0.1) -> str:
-        """Drain whatever is buffered. Returns '' when the device is quiet."""
+        """Drain whatever is buffered. Returns '' when the device is quiet.
+
+        Non-blocking on purpose. ``read_channel()`` blocks on the underlying
+        SSH/serial recv up to ``blocking_timeout`` (20s by default), which
+        would wedge the connection worker: every keystroke and structured
+        command queues behind a read that has nothing to return.
+
+        ``read_buffer()`` performs a single recv that returns immediately when
+        no data is available (paramiko's ``recv_ready`` / the serial
+        ``in_waiting`` guard), so the worker's idle poll stays responsive.
+        """
         conn = self._require_conn()
+        channel = getattr(conn, "channel", None)
         try:
-            data = conn.read_channel()
+            if channel is None or conn.remote_conn is None:
+                return ""
+            data = channel.read_buffer()
         except (EOFError, BrokenPipeError, ConnectionResetError, OSError) as exc:
             self._connected = False
             raise SessionLost(detail=str(exc)) from exc
